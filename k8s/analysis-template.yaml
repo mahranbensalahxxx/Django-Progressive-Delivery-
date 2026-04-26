@@ -1,0 +1,21 @@
+# Student 1: Canary — Analysis Template for Health Checks
+# Measures error rate via Prometheus query.
+# If error rate >= 10%, the canary rollout is aborted and rolled back automatically.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: error-rate-analysis
+  namespace: progressive-django
+spec:
+  metrics:
+  - name: error-rate
+    interval: 30s
+    count: 5          # Take 5 measurements
+    successCondition: result[0] < 0.10   # Success if <10% error rate
+    failureLimit: 2   # Allow max 2 failures before aborting
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring.svc.cluster.local:9090
+        query: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) /
+          sum(rate(http_requests_total[5m])) * 100

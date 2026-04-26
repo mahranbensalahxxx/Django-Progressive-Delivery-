@@ -1,0 +1,45 @@
+# Student 2: Blue-Green — Green Deployment (v2 - New Version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-green
+  namespace: progressive-django
+  labels:
+    app: django
+    version: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: django
+      version: green
+  template:
+    metadata:
+      labels:
+        app: django
+        version: green
+    spec:
+      containers:
+      - name: django
+        image: django-progressive:v2
+        ports:
+        - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"

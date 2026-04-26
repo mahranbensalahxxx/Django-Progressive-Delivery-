@@ -1,0 +1,19 @@
+# Student 2: Blue-Green — Django Service
+# Controls which deployment receives traffic by selecting blue or green version label.
+# Switch traffic by patching the "version" selector (blue → green or vice versa).
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-service
+  namespace: progressive-django
+  labels:
+    app: django
+spec:
+  selector:
+    app: django
+    version: blue   # Change to "green" to switch traffic (zero downtime)
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: ClusterIP

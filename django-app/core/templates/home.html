@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Progressive Delivery Django</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 3rem 4rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+        }
+        .version-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            padding: 0.4rem 1.2rem;
+            border-radius: 50px;
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 1.5rem;
+        }
+        p { font-size: 1.1rem; opacity: 0.8; line-height: 1.6; }
+        .strategies {
+            margin-top: 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .strategy-card {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            min-width: 140px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .strategy-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 6px 20px rgba(102,126,234,0.3);
+        }
+        .strategy-card h3 { font-size: 0.95rem; color: #00d2ff; margin-bottom: 0.3rem; }
+        .strategy-card p { font-size: 0.8rem; opacity: 0.6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Progressive Delivery</h1>
+        <div class="version-badge">Django v1.0</div>
+        <p>Demonstrating progressive delivery strategies<br>with Django, Docker, Kubernetes &amp; Argo Rollouts</p>
+        <div class="strategies">
+            <div class="strategy-card">
+                <h3>🐦 Canary</h3>
+                <p>Gradual traffic shift</p>
+            </div>
+            <div class="strategy-card">
+                <h3>🔵🟢 Blue-Green</h3>
+                <p>Zero-downtime switch</p>
+            </div>
+            <div class="strategy-card">
+                <h3>👻 Shadow</h3>
+                <p>Silent traffic mirror</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

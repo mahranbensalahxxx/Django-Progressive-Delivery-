@@ -1,0 +1,53 @@
+# Docker Compose — Local Testing (without Kubernetes)
+# Runs the Django app (v1 and v2) + NGINX shadow proxy locally.
+
+version: "3.9"
+
+services:
+  # Blue (v1) — Stable version
+  django-blue:
+    build:
+      context: ./django-app
+      dockerfile: Dockerfile
+    container_name: django-blue
+    ports:
+      - "8001:8000"
+    environment:
+      - APP_VERSION=v1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Green (v2) — New version (with simulated errors)
+  django-green:
+    build:
+      context: ./django-app
+      dockerfile: Dockerfile
+    container_name: django-green
+    ports:
+      - "8002:8000"
+    environment:
+      - APP_VERSION=v2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # NGINX Shadow Proxy — mirrors traffic from Blue to Green
+  nginx-shadow:
+    image: nginx:1.25-alpine
+    container_name: nginx-shadow
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx-docker.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - django-blue
+      - django-green
+
+networks:
+  default:
+    name: progressive-delivery-net

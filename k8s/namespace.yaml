@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: progressive-django
+  labels:
+    project: progressive-delivery
+    course: devops-2026

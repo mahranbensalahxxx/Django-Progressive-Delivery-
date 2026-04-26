@@ -1,0 +1,17 @@
+# Student 3: Shadow Traffic — NGINX Service
+# Exposes the NGINX shadow proxy so traffic can be routed through it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-shadow-service
+  namespace: progressive-django
+  labels:
+    app: nginx-shadow
+spec:
+  selector:
+    app: nginx-shadow
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: ClusterIP

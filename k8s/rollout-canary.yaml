@@ -1,0 +1,57 @@
+# Student 1: Canary Deployment — Argo Rollout
+# Gradually shifts traffic from v1 → v2 with automated health analysis.
+# Steps: 20% → 50% → analysis → 100%
+# If error rate exceeds threshold, Argo auto-rolls back.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: django-rollout
+  namespace: progressive-django
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: django-canary
+  template:
+    metadata:
+      labels:
+        app: django-canary
+    spec:
+      containers:
+      - name: django
+        image: django-progressive:v1   # Update to v2 to trigger canary rollout
+        ports:
+        - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+  strategy:
+    canary:
+      maxSurge: "25%"
+      maxUnavailable: 0
+      steps:
+      - setWeight: 20
+      - pause: { duration: "30s" }     # Observe 20% traffic on v2
+      - setWeight: 50
+      - pause: { duration: "60s" }     # Observe 50% traffic on v2
+      - analysis:
+          templates:
+          - templateName: error-rate-analysis
+      - setWeight: 100
+      - pause: { duration: "30s" }     # Final observation before full promotion
