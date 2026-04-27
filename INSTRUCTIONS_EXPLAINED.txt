@@ -1,0 +1,322 @@
+================================================================================
+   INSTRUCTIONS.txt — COMMAND-BY-COMMAND EXPLANATIONS
+   Why we run each command and what it does
+================================================================================
+
+
+================================================================================
+PREREQUISITES — Verifying tools
+================================================================================
+
+python --version
+  → Confirms Python is installed. We need 3.12+ to run Django 5.1.
+
+docker --version
+  → Confirms Docker CLI is installed. We use it to build container images.
+
+minikube version
+  → Confirms Minikube is installed. Minikube runs a local Kubernetes cluster
+    inside a Docker container on your machine (no cloud needed).
+
+kubectl version --client
+  → Confirms kubectl is installed. kubectl is the CLI to talk to Kubernetes
+    (create pods, services, check status, etc).
+
+git --version
+  → Confirms Git is installed. We use it for version control and branches.
+
+pipenv --version
+  → Confirms pipenv is installed. pipenv manages Python virtual environments
+    and dependencies (replacement for pip + venv).
+
+
+================================================================================
+STEP 1: PYTHON ENVIRONMENT
+================================================================================
+
+cd progressive-delivery-django/django-app
+  → Navigate to the Django app folder where manage.py and Pipfile live.
+
+pipenv install Django gunicorn psycopg2-binary
+  → Creates a virtual environment and installs 3 packages:
+    - Django: the web framework (our app)
+    - gunicorn: production WSGI server (replaces Django's dev server in Docker)
+    - psycopg2-binary: PostgreSQL driver (included for production readiness,
+      though we use SQLite in this demo)
+
+pipenv shell
+  → Activates the virtual environment. After this, "python" and "pip" point
+    to the isolated environment, not your system Python.
+
+python manage.py check
+  → Runs Django's built-in system check. It validates settings.py, installed
+    apps, middleware, database config, etc. If it says "0 issues", Django
+    is correctly configured and ready to run.
+
+python manage.py runserver 0.0.0.0:8000
+  → Starts Django's development server on port 8000, listening on all interfaces.
+    "0.0.0.0" means accept connections from any IP (not just localhost).
+    This is for LOCAL testing only — in Docker/K8s we use gunicorn instead.
+
+
+================================================================================
+STEP 2: BUILD DOCKER IMAGES
+================================================================================
+
+docker build -t django-progressive:v1 -f django-app/Dockerfile django-app/
+  → Builds a Docker image from the Dockerfile.
+    -t django-progressive:v1 = name the image "django-progressive" with tag "v1"
+    -f django-app/Dockerfile = use this specific Dockerfile
+    django-app/ = build context (the folder Docker can access for COPY commands)
+  → WHY: We need container images to run in Kubernetes. K8s doesn't run raw
+    Python code — it runs containers.
+
+# Edit views.py: VERSION = "v1.0" → "v2.0", then build again
+docker build -t django-progressive:v2 -f django-app/Dockerfile django-app/
+  → Same build but with VERSION changed to "v2.0" in the source code.
+  → WHY: We need two separate images to simulate a version upgrade.
+    v1 = stable release, v2 = new release with 15% error rate.
+
+docker images django-progressive
+  → Lists all images named "django-progressive". Confirms v1 and v2 exist.
+  → WHY: Sanity check before loading into Minikube.
+
+docker run -d --name test-v1 -p 9001:8000 django-progressive:v1
+  → Runs the v1 image as a container for local testing.
+    -d = detached (runs in background)
+    --name test-v1 = name the container "test-v1" (easier to stop later)
+    -p 9001:8000 = map laptop port 9001 to container port 8000
+  → WHY: Quick sanity check that the image works before deploying to K8s.
+
+docker stop test-v1 && docker rm test-v1
+  → Stops and removes the test container. Cleanup after testing.
+
+
+================================================================================
+STEP 3: START MINIKUBE
+================================================================================
+
+minikube delete
+  → Deletes any existing Minikube cluster and all its data.
+  → WHY: If a previous cluster is broken (apiserver Stopped), it's faster
+    to delete and recreate than to troubleshoot.
+
+minikube start --driver=docker
+  → Creates and starts a new Kubernetes cluster using Docker as the VM driver.
+    --driver=docker = run Minikube inside a Docker container (not a VM).
+  → WHY: This gives us a full Kubernetes cluster locally. It creates a Docker
+    container that runs kubelet, apiserver, etcd, and all K8s components.
+
+minikube status
+  → Shows if all cluster components are healthy.
+  → WHY: We must verify apiserver is "Running" before using kubectl.
+    If apiserver is down, no kubectl commands will work.
+
+kubectl get nodes
+  → Lists all nodes (machines) in the cluster. Minikube has 1 node.
+  → WHY: Confirms kubectl can communicate with the cluster and the node
+    is "Ready" to accept workloads.
+
+minikube image load django-progressive:v1
+minikube image load django-progressive:v2
+  → Copies Docker images from your local Docker into Minikube's internal
+    container runtime.
+  → WHY: Minikube runs its own Docker inside its container. It can't see
+    images on your laptop's Docker. We must explicitly load them in.
+    Without this, pods would show "ImagePullBackOff" error.
+
+
+================================================================================
+STEP 4: DEPLOY BLUE-GREEN (Student 2)
+================================================================================
+
+kubectl apply -f k8s/namespace.yaml
+  → Creates the "progressive-django" namespace in Kubernetes.
+  → WHY: Namespaces isolate resources. All our pods/services live in this
+    namespace so they don't mix with system pods or other projects.
+
+kubectl apply -f k8s/blue-deployment.yaml
+  → Creates 3 pods running django-progressive:v1 with label version=blue.
+  → WHY: This is the "Blue" (stable) side of Blue-Green deployment.
+
+kubectl apply -f k8s/green-deployment.yaml
+  → Creates 3 pods running django-progressive:v2 with label version=green.
+  → WHY: This is the "Green" (new version) side. Both run simultaneously.
+
+kubectl apply -f k8s/django-service.yaml
+  → Creates a Service that routes traffic to pods with version=blue.
+  → WHY: The Service is the traffic switch. It points to Blue by default.
+    We patch its selector to switch to Green (and back for rollback).
+
+kubectl apply -f k8s/blue-service.yaml
+kubectl apply -f k8s/green-service.yaml
+  → Creates dedicated services for Blue and Green pods individually.
+  → WHY: NGINX needs DNS names to reach Blue and Green separately.
+    These services create DNS entries:
+      django-blue.progressive-django.svc.cluster.local
+      django-green.progressive-django.svc.cluster.local
+
+kubectl get pods -n progressive-django
+  → Lists all pods in our namespace to verify they're running.
+  → WHY: Confirm all 6 pods (3 blue + 3 green) are "Running" before testing.
+
+kubectl port-forward service/django-service 8000:80 -n progressive-django
+  → Creates a tunnel: laptop:8000 → K8s service port 80.
+  → WHY: Services use ClusterIP (internal only). Port-forward lets us
+    reach them from our laptop for testing.
+
+kubectl patch service django-service -n progressive-django -p "{...version:green...}"
+  → Changes the Service's selector from version=blue to version=green.
+  → WHY: This IS the Blue-Green switch. Instantly routes all new traffic
+    to Green pods. Zero downtime because both sets of pods are already running.
+
+kubectl patch service django-service -n progressive-django -p "{...version:blue...}"
+  → Changes selector back to blue.
+  → WHY: This is the ROLLBACK. If Green has problems, switch back to Blue
+    instantly. Again zero downtime.
+
+
+================================================================================
+STEP 5: DEPLOY SHADOW TRAFFIC (Student 3)
+================================================================================
+
+kubectl apply -f k8s/nginx-configmap.yaml
+  → Creates a ConfigMap containing the nginx.conf file content.
+  → WHY: ConfigMaps store configuration data in Kubernetes. The NGINX pod
+    mounts this as a file at /etc/nginx/nginx.conf. This way we don't need
+    to rebuild the NGINX image when changing config.
+
+kubectl apply -f k8s/nginx-deployment.yaml
+  → Creates 2 NGINX pods that use the ConfigMap as their config.
+  → WHY: NGINX acts as a reverse proxy that forwards traffic to Blue
+    AND silently mirrors it to Green.
+
+kubectl apply -f k8s/nginx-service.yaml
+  → Creates a Service for the NGINX pods.
+  → WHY: Gives us a stable endpoint to reach the NGINX proxy.
+
+kubectl get pods -n progressive-django -l app=nginx-shadow
+  → Lists only NGINX pods (filtered by label app=nginx-shadow).
+  → WHY: Confirm NGINX pods are running. If they show "Error", the
+    Blue/Green services might not exist yet (NGINX needs their DNS names).
+
+kubectl port-forward service/nginx-shadow-service 8080:80 -n progressive-django
+  → Tunnel: laptop:8080 → NGINX proxy port 80.
+  → WHY: Lets us send requests through the shadow proxy from our laptop.
+    We use port 8080 (not 8000) to avoid conflicts.
+
+kubectl logs -n progressive-django -l version=green --tail=10
+  → Shows the last 10 log lines from all Green pods.
+  → WHY: PROVES shadow traffic works. Green logs show request activity
+    even though we only sent requests to NGINX (which shows Blue response).
+    The "Internal Server Error" lines in Green logs = Green processed the
+    mirrored request and hit its 15% error simulation.
+
+
+================================================================================
+STEP 6: INSTALL ARGO ROLLOUTS + CANARY (Student 1)
+================================================================================
+
+kubectl create namespace argo-rollouts
+  → Creates a namespace for the Argo Rollouts controller.
+  → WHY: Argo's controller runs separately from our app. Best practice
+    is to isolate it in its own namespace.
+
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+  → Downloads and installs the Argo Rollouts controller from GitHub.
+  → WHY: Argo adds the "Rollout" custom resource to Kubernetes. Without
+    this controller, K8s wouldn't understand our rollout-canary.yaml file.
+
+kubectl get pods -n argo-rollouts
+  → Confirms the Argo controller pod is running.
+  → WHY: The controller must be running before we can create Rollouts.
+
+kubectl apply -f k8s/analysis-template.yaml
+  → Creates the AnalysisTemplate that defines health check rules.
+  → WHY: Tells Argo HOW to check if v2 is healthy. It queries Prometheus
+    for error rate. If >10% errors, the canary is aborted.
+
+kubectl apply -f k8s/rollout-canary.yaml
+  → Creates the Argo Rollout with 5 pods on v1 and the canary strategy.
+  → WHY: This replaces a normal Deployment. It adds canary steps:
+    20% → pause → 50% → pause → analysis → 100%.
+
+kubectl apply -f k8s/canary-service.yaml
+  → Creates a Service pointing to canary pods (label: app=django-canary).
+  → WHY: Lets us test the canary pods through port-forward.
+
+kubectl get rollout -n progressive-django
+  → Lists Argo Rollout resources (not regular Deployments).
+  → WHY: Confirm the rollout exists with 5/5 available pods.
+
+kubectl patch rollout django-rollout ... value=django-progressive:v2
+  → Changes the container image in the Rollout from v1 to v2.
+  → WHY: This TRIGGERS the canary. Argo detects the image change and
+    starts executing the canary steps (20% → 50% → analysis).
+
+kubectl describe rollout django-rollout -n progressive-django
+  → Shows full details + events timeline of the rollout.
+  → WHY: The Events section shows every step: weight changes, pauses,
+    analysis run, and the final "RolloutAborted" (auto-rollback).
+
+
+================================================================================
+STEP 7: DOCKER COMPOSE (Local testing alternative)
+================================================================================
+
+docker-compose up --build
+  → Builds images and starts 3 containers locally (Blue, Green, NGINX).
+  → WHY: Quick way to test without Kubernetes. Good for development.
+    --build = rebuild images before starting (picks up code changes).
+
+docker-compose down
+  → Stops and removes all containers created by docker-compose.
+  → WHY: Cleanup. Frees ports 8001, 8002, 8080.
+
+
+================================================================================
+STEP 8: GIT
+================================================================================
+
+git add -A
+  → Stages ALL files (new, modified, deleted) for commit.
+  → WHY: Prepares everything to be saved in version control.
+
+git commit -m "..."
+  → Saves a snapshot of all staged files with a message.
+  → WHY: Creates a checkpoint in Git history.
+
+git branch -a
+  → Lists all branches (local and remote).
+  → WHY: Verify the 4 branches exist (master + 3 student branches).
+
+
+================================================================================
+USEFUL COMMANDS
+================================================================================
+
+kubectl get all -n progressive-django
+  → Shows ALL resources (pods, services, deployments, replicasets) at once.
+  → WHY: Quick overview of everything running in our namespace.
+
+kubectl logs -n progressive-django <pod-name>
+  → Shows stdout/stderr output from a specific pod's container.
+  → WHY: Debugging. See Django/gunicorn request logs and errors.
+
+kubectl delete namespace progressive-django
+  → Deletes the namespace AND everything inside it (all pods, services, etc).
+  → WHY: Nuclear reset. Removes all K8s resources to start fresh.
+
+minikube stop
+  → Pauses the Minikube cluster. Saves state, can restart later.
+  → WHY: Frees CPU/memory without losing your deployed resources.
+
+minikube start
+  → Resumes a stopped cluster. All pods and services come back.
+  → WHY: Continue where you left off without redeploying everything.
+
+minikube delete
+  → Permanently deletes the cluster and all data.
+  → WHY: Full cleanup when you're completely done with the project.
+
+================================================================================
