@@ -1,0 +1,41 @@
+PowerShell Canary Scripts (Windows)
+===================================
+
+Files
+-----
+1) scripts/trigger-canary-v2.ps1
+   Triggers canary update by setting rollout image to django-progressive:v2.
+
+2) scripts/reset-canary-v1.ps1
+   Resets rollout image back to django-progressive:v1.
+
+
+How to use
+----------
+1) Open PowerShell in project root:
+   cd c:\Users\mahra\OneDrive\Desktop\Django\progressive-delivery-django
+
+2) If execution policy blocks scripts (current shell only):
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+3) Trigger canary update to v2:
+   .\scripts\trigger-canary-v2.ps1
+
+4) Reset canary back to v1:
+   .\scripts\reset-canary-v1.ps1
+
+
+Optional parameters
+-------------------
+.\scripts\trigger-canary-v2.ps1 -Namespace progressive-django -RolloutName django-rollout -Image django-progressive:v2
+.\scripts\reset-canary-v1.ps1  -Namespace progressive-django -RolloutName django-rollout -Image django-progressive:v1
+
+
+Verification
+------------
+Check rollout image:
+kubectl get rollout django-rollout -n progressive-django -o jsonpath="{.spec.template.spec.containers[0].image}"
+
+Check rollout status:
+kubectl get rollout django-rollout -n progressive-django
+kubectl describe rollout django-rollout -n progressive-django

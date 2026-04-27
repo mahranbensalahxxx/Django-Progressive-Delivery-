@@ -51,7 +51,6 @@ STEP 1: SET UP PYTHON ENVIRONMENT (pipenv)
 STEP 2: BUILD DOCKER IMAGES (v1 and v2)
 ================================================================================
 
-    cd progressive-delivery-django
 
     # Make sure Docker Desktop is running!
 
@@ -63,7 +62,7 @@ STEP 2: BUILD DOCKER IMAGES (v1 and v2)
     #   To:      VERSION = "v2.0"
 
     # Build v2 image
-    docker build -t django-progressive:v2 -f django-app/Dockerfile django-app/
+
 
     # IMPORTANT: Change VERSION back to "v1.0" in views.py after building!
 
@@ -133,7 +132,9 @@ STEP 4: DEPLOY TO KUBERNETES — NAMESPACE + BLUE-GREEN (Student 2)
     curl http://localhost:8000/
     # Expected: version "v1.0"
     # Press Ctrl+C to stop port-forward
-
+    netstat -ano | findstr :8000
+    taskkill /PID 12345 /F
+    
     # Switch traffic to Green (v2) — ZERO DOWNTIME!
     kubectl patch service django-service -n progressive-django -p "{\"spec\":{\"selector\":{\"version\":\"green\"}}}"
 

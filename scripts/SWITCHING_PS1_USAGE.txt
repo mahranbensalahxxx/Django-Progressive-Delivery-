@@ -1,0 +1,43 @@
+PowerShell Blue-Green Switching Scripts (Windows)
+=================================================
+
+Files
+-----
+1) scripts/switch-to-green.ps1
+   Switches traffic to Green (v2).
+
+2) scripts/switch-to-blue.ps1
+   Switches traffic back to Blue (v1).
+
+
+How to use
+----------
+1) Open PowerShell in project root:
+   cd c:\Users\mahra\OneDrive\Desktop\Django\progressive-delivery-django
+
+2) If script execution is blocked (one-time for current shell):
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+3) Switch to Green:
+   .\scripts\switch-to-green.ps1
+
+4) Switch back to Blue:
+   .\scripts\switch-to-blue.ps1
+
+
+Optional parameters
+-------------------
+If needed, pass a custom namespace/service:
+.\scripts\switch-to-green.ps1 -Namespace progressive-django -ServiceName django-service
+.\scripts\switch-to-blue.ps1  -Namespace progressive-django -ServiceName django-service
+
+
+Quick verification
+------------------
+Check which version is active:
+kubectl get service django-service -n progressive-django -o jsonpath="{.spec.selector.version}"
+
+Test response:
+kubectl port-forward service/django-service 8000:80 -n progressive-django
+Then open another terminal and run:
+(Invoke-WebRequest -Uri http://localhost:8000/ -UseBasicParsing).Content
