@@ -1,0 +1,388 @@
+================================================================================
+   PROGRESSIVE DELIVERY DJANGO — HANDS-ON TESTING GUIDE
+   Test Each Strategy Step-by-Step with Expected Output
+================================================================================
+
+NOTE: You need TWO terminal windows for most tests.
+  - Terminal 1: runs port-forward (keeps running)
+  - Terminal 2: sends curl/test requests
+
+All commands assume you are in:
+  cd c:\Users\mahra\OneDrive\Desktop\Django\progressive-delivery-django
+
+
+================================================================================
+ BEFORE TESTING — CHECK EVERYTHING IS RUNNING
+================================================================================
+
+COMMAND:
+  minikube status
+
+EXPECTED OUTPUT:
+  minikube
+  type: Control Plane
+  host: Running
+  kubelet: Running
+  apiserver: Running          <-- THIS MUST SAY "Running"
+  kubeconfig: Configured
+
+IF apiserver says "Stopped":
+  minikube delete
+  minikube start --driver=docker
+  minikube image load django-progressive:v1
+  minikube image load django-progressive:v2
+  kubectl apply -f k8s/namespace.yaml
+  kubectl apply -f k8s/blue-deployment.yaml
+  kubectl apply -f k8s/green-deployment.yaml
+  kubectl apply -f k8s/django-service.yaml
+  kubectl apply -f k8s/blue-service.yaml
+  kubectl apply -f k8s/green-service.yaml
+  kubectl apply -f k8s/nginx-configmap.yaml
+  kubectl apply -f k8s/nginx-deployment.yaml
+  kubectl apply -f k8s/nginx-service.yaml
+  kubectl create namespace argo-rollouts
+  kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+  kubectl apply -f k8s/analysis-template.yaml
+  kubectl apply -f k8s/rollout-canary.yaml
+  kubectl apply -f k8s/canary-service.yaml
+
+---
+
+COMMAND:
+  kubectl get pods -n progressive-django
+
+EXPECTED OUTPUT (all must show Running):
+  NAME                             READY   STATUS    RESTARTS   AGE
+  django-blue-xxxxx-xxxxx          1/1     Running   0          Xm
+  django-blue-xxxxx-xxxxx          1/1     Running   0          Xm
+  django-blue-xxxxx-xxxxx          1/1     Running   0          Xm
+  django-green-xxxxx-xxxxx         1/1     Running   0          Xm
+  django-green-xxxxx-xxxxx         1/1     Running   0          Xm
+  django-green-xxxxx-xxxxx         1/1     Running   0          Xm
+  django-rollout-xxxxx-xxxxx       1/1     Running   0          Xm
+  django-rollout-xxxxx-xxxxx       1/1     Running   0          Xm
+  django-rollout-xxxxx-xxxxx       1/1     Running   0          Xm
+  django-rollout-xxxxx-xxxxx       1/1     Running   0          Xm
+  django-rollout-xxxxx-xxxxx       1/1     Running   0          Xm
+  nginx-shadow-xxxxx-xxxxx         1/1     Running   0          Xm
+  nginx-shadow-xxxxx-xxxxx         1/1     Running   0          Xm
+
+  Total: 13 pods (3 blue + 3 green + 5 canary + 2 nginx)
+
+---
+
+COMMAND:
+  kubectl get services -n progressive-django
+
+EXPECTED OUTPUT:
+  NAME                   TYPE        CLUSTER-IP       PORT(S)    AGE
+  django-blue            ClusterIP   10.x.x.x         8000/TCP   Xm
+  django-canary-service  ClusterIP   10.x.x.x         80/TCP     Xm
+  django-green           ClusterIP   10.x.x.x         8000/TCP   Xm
+  django-service         ClusterIP   10.x.x.x         80/TCP     Xm
+  nginx-shadow-service   ClusterIP   10.x.x.x         80/TCP     Xm
+
+
+================================================================================
+ TEST 1: BLUE-GREEN DEPLOYMENT (Student 2)
+================================================================================
+
+WHAT IT PROVES:
+  - Two versions run side-by-side (Blue=v1, Green=v2)
+  - Traffic switches instantly by changing the Service selector
+  - Zero downtime — no requests are dropped during switch
+
+--- Step 1A: Verify Blue (v1) is active ---
+
+COMMAND (check which version the service points to):
+  kubectl get service django-service -n progressive-django -o jsonpath="{.spec.selector.version}"
+
+EXPECTED OUTPUT:
+  blue
+
+--- Step 1B: Test Blue (v1) ---
+
+TERMINAL 1 — start port-forward (keep this running):
+  kubectl port-forward service/django-service 8000:80 -n progressive-django
+
+EXPECTED OUTPUT in Terminal 1:
+  Forwarding from 127.0.0.1:8000 -> 8000
+  Forwarding from [::1]:8000 -> 8000
+
+TERMINAL 2 — send request:
+  PowerShell:
+    (Invoke-WebRequest -Uri http://localhost:8000/ -UseBasicParsing).Content
+
+  OR curl (Git Bash):
+    curl http://localhost:8000/
+
+EXPECTED OUTPUT:
+  {"message": "Hello from Progressive Delivery Django - v1.0", "version": "v1.0", "student_demo": "Traffic shifting / rollback / shadow in action"}
+
+WHERE TO VERIFY: Look at "version": "v1.0" — this confirms Blue is active.
+
+--- Step 1C: Test health endpoint ---
+
+TERMINAL 2:
+  PowerShell:
+    (Invoke-WebRequest -Uri http://localhost:8000/healthz -UseBasicParsing).Content
+
+EXPECTED OUTPUT:
+  {"status": "healthy", "version": "v1.0"}
+
+--- Step 1D: SWITCH to Green (v2) — Zero Downtime ---
+
+TERMINAL 1: Press Ctrl+C to stop port-forward first.
+
+TERMINAL 2 — patch the service:
+  kubectl patch service django-service -n progressive-django -p "{\"spec\":{\"selector\":{\"version\":\"green\"}}}"
+
+EXPECTED OUTPUT:
+  service/django-service patched
+
+VERIFY THE SWITCH:
+  kubectl get service django-service -n progressive-django -o jsonpath="{.spec.selector.version}"
+
+EXPECTED OUTPUT:
+  green
+
+--- Step 1E: Test Green (v2) ---
+
+TERMINAL 1 — restart port-forward:
+  kubectl port-forward service/django-service 8000:80 -n progressive-django
+
+TERMINAL 2 — send multiple requests (v2 has ~15% error rate):
+  PowerShell:
+    for ($i = 1; $i -le 10; $i++) { try { $r = Invoke-WebRequest -Uri http://localhost:8000/ -UseBasicParsing; Write-Host "Request $i : $($r.Content)" } catch { Write-Host "Request $i : ERROR 500 (simulated v2 error)" } }
+
+EXPECTED OUTPUT (mix of success and errors):
+  Request 1 : {"message": "Hello from Progressive Delivery Django - v2.0", ...}
+  Request 2 : {"message": "Hello from Progressive Delivery Django - v2.0", ...}
+  Request 3 : ERROR 500 (simulated v2 error)
+  Request 4 : {"message": "Hello from Progressive Delivery Django - v2.0", ...}
+  ...etc
+
+WHERE TO VERIFY: 
+  - "version": "v2.0" confirms Green is now active
+  - Some ERROR 500 responses prove the v2 error simulation works (~15% rate)
+
+--- Step 1F: ROLLBACK to Blue (v1) ---
+
+TERMINAL 1: Ctrl+C to stop port-forward.
+
+TERMINAL 2:
+  kubectl patch service django-service -n progressive-django -p "{\"spec\":{\"selector\":{\"version\":\"blue\"}}}"
+
+EXPECTED OUTPUT:
+  service/django-service patched
+
+VERIFY:
+  kubectl get service django-service -n progressive-django -o jsonpath="{.spec.selector.version}"
+
+EXPECTED:
+  blue
+
+--- END OF BLUE-GREEN TEST ---
+
+
+================================================================================
+ TEST 2: SHADOW TRAFFIC (Student 3)
+================================================================================
+
+WHAT IT PROVES:
+  - NGINX sits in front and proxies traffic to Blue (v1)
+  - Every request is SILENTLY MIRRORED to Green (v2)
+  - User only sees Blue response — Green gets a copy for testing
+  - Allows testing v2 with real traffic without any user impact
+
+--- Step 2A: Test Shadow Proxy ---
+
+TERMINAL 1 — port-forward to NGINX shadow proxy:
+  kubectl port-forward service/nginx-shadow-service 8080:80 -n progressive-django
+
+EXPECTED OUTPUT in Terminal 1:
+  Forwarding from 127.0.0.1:8080 -> 80
+  Forwarding from [::1]:8080 -> 80
+
+TERMINAL 2 — send requests through shadow proxy:
+  PowerShell:
+    for ($i = 1; $i -le 5; $i++) { try { $r = Invoke-WebRequest -Uri http://localhost:8080/ -UseBasicParsing; Write-Host "Shadow $i : $($r.Content)" } catch { Write-Host "Shadow $i : ERROR" } }
+
+EXPECTED OUTPUT (ALL should show v1.0!):
+  Shadow 1 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Shadow 2 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Shadow 3 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Shadow 4 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Shadow 5 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+
+WHERE TO VERIFY:
+  - User ONLY sees v1.0 — the shadow is invisible to the user
+  - No errors because Blue (v1) is stable
+
+--- Step 2B: Prove Green received the mirrored traffic ---
+
+TERMINAL 2 — check Green pod logs:
+  kubectl logs -n progressive-django -l version=green --tail=15
+
+EXPECTED OUTPUT (you should see request activity):
+  [2026-XX-XX XX:XX:XX +0000] [1] [INFO] Starting gunicorn 25.3.0
+  [2026-XX-XX XX:XX:XX +0000] [1] [INFO] Listening at: http://0.0.0.0:8000 (1)
+  Internal Server Error: /        <-- Green processing mirrored requests!
+
+WHERE TO VERIFY:
+  - "Internal Server Error: /" in Green logs = v2 received the mirrored request
+    and hit its 15% error simulation
+  - This proves shadow traffic is working — Green got the same requests
+    the user sent to Blue, but the user never saw Green's errors
+
+TERMINAL 1: Ctrl+C to stop port-forward.
+
+--- END OF SHADOW TRAFFIC TEST ---
+
+
+================================================================================
+ TEST 3: CANARY DEPLOYMENT + AUTO-ROLLBACK (Student 1)
+================================================================================
+
+WHAT IT PROVES:
+  - Argo Rollouts gradually shifts traffic: 20% -> 50% -> analysis -> 100%
+  - If health analysis fails, Argo AUTOMATICALLY rolls back to v1
+  - No manual intervention needed for rollback
+
+--- Step 3A: Verify canary is on v1 ---
+
+TERMINAL 1:
+  kubectl port-forward service/django-canary-service 8090:80 -n progressive-django
+
+TERMINAL 2:
+  PowerShell:
+    (Invoke-WebRequest -Uri http://localhost:8090/ -UseBasicParsing).Content
+
+EXPECTED OUTPUT:
+  {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+
+WHERE TO VERIFY: "version": "v1.0" — canary starts on stable v1.
+
+TERMINAL 1: Ctrl+C to stop.
+
+--- Step 3B: Check current rollout status ---
+
+COMMAND:
+  kubectl get rollout django-rollout -n progressive-django
+
+EXPECTED OUTPUT:
+  NAME             DESIRED   CURRENT   UP-TO-DATE   AVAILABLE
+  django-rollout   5         5         5            5
+
+--- Step 3C: TRIGGER canary update to v2 ---
+
+COMMAND:
+  kubectl patch rollout django-rollout -n progressive-django --type="json" -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/image\",\"value\":\"django-progressive:v2\"}]"
+
+EXPECTED OUTPUT:
+  rollout.argoproj.io/django-rollout patched
+
+--- Step 3D: Watch the rollout progress ---
+
+Run this immediately after triggering (monitors every 15 seconds):
+
+  PowerShell:
+    for ($i = 1; $i -le 12; $i++) { $step = kubectl get rollout django-rollout -n progressive-django -o jsonpath="{.status.currentStepIndex}"; $phase = kubectl get rollout django-rollout -n progressive-django -o jsonpath="{.status.phase}"; Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Step: $step | Phase: $phase"; Start-Sleep 15 }
+
+EXPECTED OUTPUT (over ~3 minutes):
+  [01:04:39] Step: 1 | Phase: Paused        <-- 20% weight set, pausing 30s
+  [01:04:54] Step: 1 | Phase: Paused
+  [01:05:09] Step: 3 | Phase: Paused        <-- 50% weight set, pausing 60s
+  [01:05:24] Step: 3 | Phase: Paused
+  [01:05:39] Step: 3 | Phase: Paused
+  [01:05:54] Step: 3 | Phase: Paused
+  [01:06:09] Step: 4 | Phase: Progressing   <-- Analysis running
+  [01:06:24] Step: 4 | Phase: Progressing
+  [01:06:39] Step: 0 | Phase: Degraded      <-- ROLLBACK! Analysis failed!
+
+WHERE TO VERIFY:
+  - Phase goes from Paused -> Progressing -> Degraded
+  - Step goes back to 0 = rolled back to v1
+  - "Degraded" = Argo detected the problem and rolled back automatically
+
+--- Step 3E: See detailed rollout events ---
+
+COMMAND:
+  kubectl describe rollout django-rollout -n progressive-django
+
+SCROLL TO "Events:" SECTION AT THE BOTTOM. You should see:
+
+  Normal   RolloutStepCompleted   Rollout step 1/7 completed (setWeight: 20)
+  Normal   RolloutStepCompleted   Rollout step 2/7 completed (pause: 30s)
+  Normal   RolloutStepCompleted   Rollout step 3/7 completed (setWeight: 50)
+  Normal   RolloutStepCompleted   Rollout step 4/7 completed (pause: 60s)
+  Normal   AnalysisRunRunning     Status New: 'Running'
+  Warning  AnalysisRunError       Status New: 'Error'
+  Warning  RolloutAborted         Rollout aborted update to revision 2
+
+This proves the FULL canary lifecycle:
+  20% traffic -> 50% traffic -> analysis failed -> AUTO-ROLLBACK
+
+--- Step 3F: Confirm rollback — verify v1 is serving again ---
+
+TERMINAL 1:
+  kubectl port-forward service/django-canary-service 8090:80 -n progressive-django
+
+TERMINAL 2:
+  PowerShell:
+    for ($i = 1; $i -le 5; $i++) { try { $r = Invoke-WebRequest -Uri http://localhost:8090/ -UseBasicParsing; Write-Host "Post-rollback $i : $($r.Content)" } catch { Write-Host "Post-rollback $i : ERROR" } }
+
+EXPECTED OUTPUT (ALL v1.0, NO errors):
+  Post-rollback 1 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Post-rollback 2 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Post-rollback 3 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Post-rollback 4 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+  Post-rollback 5 : {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+
+WHERE TO VERIFY:
+  - ALL responses show v1.0 = rollback was successful
+  - NO 500 errors = stable version is fully restored
+
+TERMINAL 1: Ctrl+C to stop.
+
+--- Step 3G: Reset canary for re-testing (optional) ---
+
+To test the canary again, first reset it back to v1:
+  kubectl patch rollout django-rollout -n progressive-django --type="json" -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/image\",\"value\":\"django-progressive:v1\"}]"
+
+Wait 30 seconds, then repeat from Step 3C.
+
+--- END OF CANARY TEST ---
+
+
+================================================================================
+ QUICK REFERENCE — ALL PORT-FORWARDS
+================================================================================
+
+  Blue-Green (django-service):
+    kubectl port-forward service/django-service 8000:80 -n progressive-django
+    Test: http://localhost:8000/
+
+  Shadow Proxy (nginx-shadow):
+    kubectl port-forward service/nginx-shadow-service 8080:80 -n progressive-django
+    Test: http://localhost:8080/
+
+  Canary (django-canary-service):
+    kubectl port-forward service/django-canary-service 8090:80 -n progressive-django
+    Test: http://localhost:8090/
+
+  Health check (any of the above):
+    http://localhost:<port>/healthz
+
+
+================================================================================
+ CLEANUP — STOP EVERYTHING
+================================================================================
+
+  # Stop Minikube (keeps data, can restart later)
+  minikube stop
+
+  # OR delete everything completely
+  minikube delete
+
+================================================================================
