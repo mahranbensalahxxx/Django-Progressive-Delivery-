@@ -1,0 +1,16 @@
+# Student 1: Canary — Service for the Argo Rollout
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-canary-service
+  namespace: progressive-django
+  labels:
+    app: django-canary
+spec:
+  selector:
+    app: django-canary
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: ClusterIP

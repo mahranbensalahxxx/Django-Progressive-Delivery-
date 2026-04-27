@@ -1,0 +1,342 @@
+================================================================================
+   PROGRESSIVE DELIVERY FOR DJANGO — FULL SETUP & RUN INSTRUCTIONS
+   Topic 33 | Django + Docker + Kubernetes (Minikube) + Argo Rollouts
+================================================================================
+
+================================================================================
+PREREQUISITES (Install these first if not already installed)
+================================================================================
+
+1. Python 3.12+          → https://www.python.org/downloads/
+2. Docker Desktop        → https://www.docker.com/products/docker-desktop/
+3. Minikube              → https://minikube.sigs.k8s.io/docs/start/
+4. kubectl               → https://kubernetes.io/docs/tasks/tools/
+5. Git                   → https://git-scm.com/downloads
+6. pipenv                → pip install pipenv
+
+Verify all are installed:
+
+    python --version
+    docker --version
+    minikube version
+    kubectl version --client
+    git --version
+    pipenv --version
+
+
+================================================================================
+STEP 1: SET UP PYTHON ENVIRONMENT (pipenv)
+================================================================================
+
+    cd progressive-delivery-django/django-app
+
+    # Install dependencies with pipenv
+    pipenv install Django gunicorn psycopg2-binary
+
+    # Activate the virtual environment
+    pipenv shell
+
+    # Verify Django works
+    python manage.py check
+    # Expected: "System check identified no issues (0 silenced)."
+
+    # (Optional) Run Django locally to test
+    python manage.py runserver 0.0.0.0:8000
+    # Test: open http://localhost:8000/ in browser
+    # Test: open http://localhost:8000/healthz in browser
+    # Press Ctrl+C to stop
+
+
+================================================================================
+STEP 2: BUILD DOCKER IMAGES (v1 and v2)
+================================================================================
+
+    cd progressive-delivery-django
+
+    # Make sure Docker Desktop is running!
+
+    # Build v1 image (VERSION = "v1.0" in core/views.py)
+    docker build -t django-progressive:v1 -f django-app/Dockerfile django-app/
+
+    # Now edit django-app/core/views.py:
+    #   Change:  VERSION = "v1.0"
+    #   To:      VERSION = "v2.0"
+
+    # Build v2 image
+    docker build -t django-progressive:v2 -f django-app/Dockerfile django-app/
+
+    # IMPORTANT: Change VERSION back to "v1.0" in views.py after building!
+
+    # Verify both images exist
+    docker images django-progressive
+    # Expected: two rows — v1 and v2
+
+    # (Optional) Test Docker images locally
+    docker run -d --name test-v1 -p 9001:8000 django-progressive:v1
+    curl http://localhost:9001/
+    # Expected: {"message": "Hello from Progressive Delivery Django - v1.0", ...}
+    docker stop test-v1 && docker rm test-v1
+
+
+================================================================================
+STEP 3: START MINIKUBE (Local Kubernetes Cluster)
+================================================================================
+
+    # If you have a previous broken cluster, delete it first:
+    minikube delete
+
+    # Start a fresh Minikube cluster
+    minikube start --driver=docker
+
+    # Verify Minikube is running
+    minikube status
+    # Expected: host: Running, kubelet: Running, apiserver: Running
+
+    # Verify kubectl can talk to the cluster
+    kubectl get nodes
+    # Expected: minikube   Ready   control-plane   ...
+
+    # Load Docker images into Minikube
+    minikube image load django-progressive:v1
+    minikube image load django-progressive:v2
+
+
+================================================================================
+STEP 4: DEPLOY TO KUBERNETES — NAMESPACE + BLUE-GREEN (Student 2)
+================================================================================
+
+    cd progressive-delivery-django
+
+    # Create the namespace
+    kubectl apply -f k8s/namespace.yaml
+
+    # Deploy Blue (v1) and Green (v2) deployments
+    kubectl apply -f k8s/blue-deployment.yaml
+    kubectl apply -f k8s/green-deployment.yaml
+
+    # Deploy the main service (points to Blue by default)
+    kubectl apply -f k8s/django-service.yaml
+
+    # Deploy individual services for Blue and Green (needed for NGINX)
+    kubectl apply -f k8s/blue-service.yaml
+    kubectl apply -f k8s/green-service.yaml
+
+    # Wait for pods and check status
+    kubectl get pods -n progressive-django
+    # Expected: 3 blue pods + 3 green pods, all Running
+
+    # --- TEST BLUE-GREEN ---
+
+    # Port-forward to test Blue (v1)
+    kubectl port-forward service/django-service 8000:80 -n progressive-django
+    # In another terminal:
+    curl http://localhost:8000/
+    # Expected: version "v1.0"
+    # Press Ctrl+C to stop port-forward
+
+    # Switch traffic to Green (v2) — ZERO DOWNTIME!
+    kubectl patch service django-service -n progressive-django -p "{\"spec\":{\"selector\":{\"version\":\"green\"}}}"
+
+    # Port-forward again and test
+    kubectl port-forward service/django-service 8000:80 -n progressive-django
+    # curl http://localhost:8000/
+    # Expected: version "v2.0" (might see occasional 500 errors — that's the simulation!)
+
+    # Switch back to Blue (rollback)
+    kubectl patch service django-service -n progressive-django -p "{\"spec\":{\"selector\":{\"version\":\"blue\"}}}"
+
+
+================================================================================
+STEP 5: DEPLOY NGINX SHADOW TRAFFIC (Student 3)
+================================================================================
+
+    # Deploy NGINX shadow proxy
+    kubectl apply -f k8s/nginx-configmap.yaml
+    kubectl apply -f k8s/nginx-deployment.yaml
+    kubectl apply -f k8s/nginx-service.yaml
+
+    # Check NGINX pods are running
+    kubectl get pods -n progressive-django -l app=nginx-shadow
+    # Expected: 2 nginx pods Running
+
+    # --- TEST SHADOW TRAFFIC ---
+
+    # Port-forward to NGINX shadow proxy
+    kubectl port-forward service/nginx-shadow-service 8080:80 -n progressive-django
+
+    # In another terminal, send requests through shadow proxy
+    curl http://localhost:8080/
+    # Expected: v1.0 response (Blue) — user only sees Blue
+    # BUT Green (v2) also receives the same request silently!
+
+    # Check Green pod logs for mirrored requests
+    kubectl logs -n progressive-django -l version=green --tail=10
+    # You should see request activity in Green pods even though you only hit Blue
+
+    # Press Ctrl+C to stop port-forward
+
+
+================================================================================
+STEP 6: INSTALL ARGO ROLLOUTS + DEPLOY CANARY (Student 1)
+================================================================================
+
+    # Install Argo Rollouts controller
+    kubectl create namespace argo-rollouts
+    kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+    # Wait for Argo controller to be ready
+    kubectl get pods -n argo-rollouts
+    # Expected: argo-rollouts pod Running
+
+    # Deploy Canary analysis template and rollout
+    kubectl apply -f k8s/analysis-template.yaml
+    kubectl apply -f k8s/rollout-canary.yaml
+
+    # Deploy Canary service
+    kubectl apply -f k8s/canary-service.yaml
+
+    # Check rollout status
+    kubectl get rollout -n progressive-django
+    # Expected: django-rollout with 5/5 available
+
+    # --- TEST CANARY ROLLOUT ---
+
+    # Verify canary is on v1
+    kubectl port-forward service/django-canary-service 8090:80 -n progressive-django
+    # curl http://localhost:8090/
+    # Expected: v1.0
+    # Ctrl+C to stop
+
+    # TRIGGER CANARY UPDATE TO v2
+    kubectl patch rollout django-rollout -n progressive-django \
+      --type='json' \
+      -p='[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"django-progressive:v2"}]'
+
+    # Watch the rollout progress
+    kubectl describe rollout django-rollout -n progressive-django
+
+    # The canary will go through these steps:
+    #   Step 1: setWeight 20%  → 1 v2 pod, 4 v1 pods
+    #   Step 2: pause 30s      → observe
+    #   Step 3: setWeight 50%  → 3 v2 pods, 3 v1 pods
+    #   Step 4: pause 60s      → observe
+    #   Step 5: analysis       → checks error rate
+    #   Step 6: setWeight 100% → full v2 (if analysis passes)
+    #   Step 7: pause 30s      → final check
+    #
+    # Without Prometheus, the analysis will fail and Argo will AUTO-ROLLBACK to v1.
+    # This demonstrates the safety mechanism!
+
+    # Check events for the full rollout lifecycle
+    kubectl describe rollout django-rollout -n progressive-django | Select-String "Event" -Context 0,30
+
+
+================================================================================
+STEP 7: LOCAL TESTING WITH DOCKER COMPOSE (No Kubernetes needed)
+================================================================================
+
+    cd progressive-delivery-django
+
+    # Start all services (Blue, Green, NGINX Shadow)
+    docker-compose up --build
+
+    # In another terminal:
+    curl http://localhost:8001/     # Blue (v1) directly
+    curl http://localhost:8002/     # Green (v2) directly
+    curl http://localhost:8080/     # Shadow proxy (user sees Blue, Green gets mirror)
+
+    # Stop
+    docker-compose down
+
+
+================================================================================
+STEP 8: GIT — FINAL COMMIT + BRANCHES
+================================================================================
+
+    cd progressive-delivery-django
+
+    git add -A
+    git commit -m "Complete progressive delivery project — all strategies tested"
+
+    # Branches are already created:
+    #   main (or master)    — full integrated project
+    #   student1-canary     — Canary + Argo files
+    #   student2-bluegreen  — Blue-Green files
+    #   student3-shadow     — NGINX Shadow files
+
+    # View branches
+    git branch -a
+
+
+================================================================================
+USEFUL COMMANDS REFERENCE
+================================================================================
+
+    # Check all resources in namespace
+    kubectl get all -n progressive-django
+
+    # Check pod logs
+    kubectl logs -n progressive-django <pod-name>
+
+    # Delete everything and start fresh
+    kubectl delete namespace progressive-django
+    kubectl apply -f k8s/namespace.yaml
+
+    # Stop Minikube
+    minikube stop
+
+    # Start Minikube again
+    minikube start
+
+    # Delete Minikube cluster completely
+    minikube delete
+
+
+================================================================================
+SUMMARY OF WHAT EACH STUDENT OWNS
+================================================================================
+
+    Student 1 (Canary + Argo Rollouts):
+      - k8s/rollout-canary.yaml
+      - k8s/analysis-template.yaml
+      - k8s/canary-service.yaml
+      - scripts/deploy-canary.sh
+
+    Student 2 (Blue-Green Deployment):
+      - k8s/blue-deployment.yaml
+      - k8s/green-deployment.yaml
+      - k8s/django-service.yaml
+      - k8s/blue-service.yaml
+      - k8s/green-service.yaml
+      - scripts/switch-blue-green.sh
+
+    Student 3 (Shadow Traffic — NGINX):
+      - nginx/nginx.conf
+      - k8s/nginx-configmap.yaml
+      - k8s/nginx-deployment.yaml
+      - k8s/nginx-service.yaml
+      - scripts/run-shadow-test.sh
+
+    Shared (All Students):
+      - django-app/ (entire Django application)
+      - Dockerfile
+      - k8s/namespace.yaml
+      - docker-compose.yml
+      - README.md
+      - INSTRUCTIONS.txt
+
+
+================================================================================
+TESTED RESULTS (All Verified Working)
+================================================================================
+
+    [PASS] Django app — System check: 0 issues
+    [PASS] Docker v1 — Returns: {"version": "v1.0", ...}
+    [PASS] Docker v2 — Returns: {"version": "v2.0", ...}
+    [PASS] Minikube — All components Running
+    [PASS] Blue-Green — Switch blue->green->blue, zero downtime
+    [PASS] Shadow Traffic — NGINX mirrors Blue to Green silently
+    [PASS] Canary Rollout — 20%->50%->analysis->AUTO-ROLLBACK to v1
+    [PASS] Health endpoint — /healthz returns {"status": "healthy"}
+
+================================================================================
