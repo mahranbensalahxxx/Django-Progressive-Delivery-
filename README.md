@@ -291,3 +291,5 @@ docker-compose down
 | Student 1 | Canary + Argo Rollouts | `rollout-canary.yaml`, `analysis-template.yaml`, `deploy-canary.sh` |
 | Student 2 | Blue-Green Deployment | `blue-deployment.yaml`, `green-deployment.yaml`, `django-service.yaml`, `switch-blue-green.sh` |
 | Student 3 | Shadow Traffic (NGINX) | `nginx.conf`, `nginx-configmap.yaml`, `nginx-deployment.yaml`, `run-shadow-test.sh` |
+#   D j a n g o - P r o g r e s s i v e - D e l i v e r y -  
+ 
